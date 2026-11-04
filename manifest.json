@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.04-1629",
+  "version": "2026.11.04-1634",
   "bridge_api": 2,
   "min_gui": "2.3.0",
   "notes": "BridgeUpdate snapshot: bridge, plugins, cortex.",
@@ -7,16 +7,8 @@
   "restart": true,
   "files": [
     {
-      "path": "etc/synaptic-bridge/plugins/add_noise.py",
-      "sha256": "11865e90afbf5bd6305ae5d8951bc54ee62442753d914f39cd663cf7163e5383"
-    },
-    {
       "path": "etc/synaptic-bridge/plugins/envolvente_rms.py",
       "sha256": "11865e90afbf5bd6305ae5d8951bc54ee62442753d914f39cd663cf7163e5383"
-    },
-    {
-      "path": "home/pico/synaptic-bridge/luckfox-device/Borrrar",
-      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     {
       "path": "home/pico/synaptic-bridge/luckfox-device/EA/calibrar.py",
@@ -159,5 +151,8 @@
       "sha256": "150b1354152bbe987b03a11bb5f6c16fbaf3feef7b7c73d24958827d9cf1adf2"
     }
   ],
-  "removed": []
+  "removed": [
+    "etc/synaptic-bridge/plugins/add_noise.py",
+    "home/pico/synaptic-bridge/luckfox-device/Borrrar"
+  ]
 }
