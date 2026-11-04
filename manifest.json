@@ -1,0 +1,155 @@
+{
+  "version": "2026.11.04-1",
+  "bridge_api": 2,
+  "min_gui": "2.3.0",
+  "notes": "BridgeUpdate snapshot: bridge, plugins, cortex.",
+  "allow_code": true,
+  "restart": true,
+  "files": [
+    {
+      "path": "etc/synaptic-bridge/plugins/envolvente_rms.py",
+      "sha256": "c31e19126afb06aaaee1a5216e16426c336e1af604d6a75b58ca367984443dc8"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/calibrar.py",
+      "sha256": "3a4be0b136980182ae774ec2a4e467d13867f132e89a791ebab4d798bdbbc739"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/datos/EA_calibracion.npz",
+      "sha256": "390057204ec157c89dd1dec65172c9b419afa9e18969326c36be60e37bc0eecf"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/datos/EA_ref.npz",
+      "sha256": "b15c87935d469abb7a2ac6f28f6a4bc9e7fa75386aa982f555f92e4b0e0a8f65"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/datos/calibracion_datos.npz",
+      "sha256": "846b242150e759a785a96b6195875c1af9aae97a4b3ed36a821e15f119de63b8"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/datos/finetune.npz",
+      "sha256": "525c64f4a9d14bb449bebd1641d4b63eb8155e6fa82154acb741a94ecb4ddddc"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/inferencia_tiempo_real.py",
+      "sha256": "4dfcd2af9dbe1a26ea4a0a81a9ea08d71bc962d64f35575d41c33e1e013f51fe"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/modelos/GRUCNN.npz",
+      "sha256": "caebc31545805dcdb43be29e20815d375832e700885541a3ad0f89ca912dfb4d"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/synaptic/__pycache__/euclidean_align.cpython-310.pyc",
+      "sha256": "2fd65066f793cc19ac82b93cf60d7516275e57bbd725352313866f919fea354a"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/synaptic/__pycache__/inferencia_numpy.cpython-310.pyc",
+      "sha256": "18524be72dd857cedcc2837871b4346ebaca4fc2a5c0e202d31fcd92aac210e9"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/synaptic/__pycache__/mlp_numpy.cpython-310.pyc",
+      "sha256": "103dc0eed838a49ec13a3094eb224af4d8b0b30b2e2af0fe27fb2198b2305e86"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/synaptic/__pycache__/synaptic_bridge_lsl.cpython-310.pyc",
+      "sha256": "0d95429e8ebccd695d895706a3c9534e13dc651f60943fe950f874bcdb44c132"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/synaptic/__pycache__/synaptic_bridge_lsl.cpython-311.pyc",
+      "sha256": "53306e88720ce0b1aa9004cb42b510c98ead39abae57bf1169407b63814972cf"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/synaptic/euclidean_align.py",
+      "sha256": "e7945feb2b3e2dce7666708e5663b9a57887106bc8c4e4f9953bda12a811943e"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/synaptic/inferencia_numpy.py",
+      "sha256": "57d641aa16be37a859eeafa36203aa2a9b0b17c72d4c157c781e4f32c7eb7b40"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/synaptic/mlp_numpy.py",
+      "sha256": "72a3b3603de9a96319464f283548df688ce49fdb6833c0e14c426ac78413897b"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/EA/synaptic/synaptic_bridge_lsl.py",
+      "sha256": "c58590c0828fbc3e72d2c0987951d4cc64fd161f91a72533695425cdc58aae3f"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/README.md",
+      "sha256": "a938e0039dcf887b1d1ef4ef67e3e9956e5c1334f056610420f14f1514b87409"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/README_bridge_v2.md",
+      "sha256": "b3f6b11800e731a52079fba31c650af70ed4367e5ae08a5e25a187c908298fac"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/bridge_config.example.json",
+      "sha256": "acef2b6e9e7dbe98c3648d67568467beb9c13d094a501b4475803356df552fcf"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/bridge_config.json",
+      "sha256": "394fb2b11fa779854908902197eb423b568fe8afa778de6cf4c742fcd537a47d"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/config/bridge_config.example.json",
+      "sha256": "d31a10241fcc60da32c9005851368a3ec37160b43cdfba684c8cc9c897a78d5d"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/envolvente_rms.py",
+      "sha256": "c31e19126afb06aaaee1a5216e16426c336e1af604d6a75b58ca367984443dc8"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/euclidean_align.py",
+      "sha256": "e7945feb2b3e2dce7666708e5663b9a57887106bc8c4e4f9953bda12a811943e"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/fake_esp32.py",
+      "sha256": "ce69a111efbe6f7f094a00d7bfa801a1dac03ff4efbf5b67f5453a92c2d0089d"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/filter_chain.py",
+      "sha256": "853fa0749ebd4a25e5bb9ed20c6e92b4d8c3635bd4dec094d9e47a6d73830fb4"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/install.sh",
+      "sha256": "89afbf5454549f7c5984afa1f7d05d45e7ee36a3d1355bf0367420b17b5579ed"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/network/device.env.example",
+      "sha256": "87a979b4459952861d902f5c9998155acb70b3a3f61f309c08130a410f9d98e7"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/network/dnsmasq.conf.example",
+      "sha256": "d4680ed5bc4c35be908f821423a8e6bc4f88e12c0f7fb25afb3747b1e120c2d3"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/network/generate-device-network.sh",
+      "sha256": "ce1bd9b23309a50edbb83133d9cd41b919cf40a8c09b53c577568f67b8e94967"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/network/hostapd.conf.example",
+      "sha256": "f7efa611ad77527cc421903b77fb68ee69236da58ccb0fc23d422f4aed674fbe"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/pipeline.py",
+      "sha256": "f5bd578b9d87f38c172b4216c19d940fd150296143037a94d15418fe6ca1f5e3"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/requirements.txt",
+      "sha256": "faf81c34d1706363e5681a54725db1c8cbd1eb6d59be5d8f98516ba8abdd1e32"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/systemd/udp-lsl.service",
+      "sha256": "3c7ebef4fda96d95e331153dfbe4307838d7371672727340372d8fdbd2171572"
+    },
+    {
+      "path": "home/pico/synaptic-bridge/luckfox-device/udp_to_lsl_bridge.py",
+      "sha256": "8c4dfd82324e59ff06741f23c55762ac884a5bde80c3d7876ac568fb6b9cc195"
+    },
+    {
+      "path": "home/pico/synaptic_cortex/euclidean_align.py",
+      "sha256": "e7945feb2b3e2dce7666708e5663b9a57887106bc8c4e4f9953bda12a811943e"
+    }
+  ],
+  "removed": []
+}
