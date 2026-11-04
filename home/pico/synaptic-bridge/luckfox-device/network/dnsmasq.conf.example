@@ -1,0 +1,25 @@
+# dnsmasq.conf — plantilla del servidor DHCP/DNS del AP de ESTE Luckfox.
+#
+# La subred DEBE ser distinta por dispositivo (ver hostapd.conf.example y
+# docs/04-configuracion-red.md). Genera la versión real con
+# network/generate-device-network.sh.
+#
+# Destino en el Luckfox: /etc/dnsmasq.conf
+# (si el sistema trae NetworkManager con dnsmasq integrado, usar en su lugar
+# /etc/NetworkManager/dnsmasq-shared.d/synaptic-bridge.conf — ver docs)
+
+interface=__AP_IFACE__
+bind-interfaces
+# No reenviar consultas DNS que no reconoce este dnsmasq
+domain-needed
+bogus-priv
+
+# Rango DHCP para esta subred. __SUBNET_OCTET__ es el tercer octeto,
+# único por dispositivo (p.ej. 4 -> 192.168.4.0/24).
+dhcp-range=192.168.__SUBNET_OCTET__.10,192.168.__SUBNET_OCTET__.100,255.255.255.0,12h
+listen-address=192.168.__SUBNET_OCTET__.1
+
+dhcp-option=3,192.168.__SUBNET_OCTET__.1
+dhcp-option=6,192.168.__SUBNET_OCTET__.1
+
+log-dhcp

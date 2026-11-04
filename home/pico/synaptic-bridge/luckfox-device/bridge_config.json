@@ -1,0 +1,57 @@
+{
+  "bridge": {
+    "rcvbuf_bytes": 4194304,
+    "max_buffered_s": 30,
+    "stats_interval_s": 5.0,
+    "stage_time_budget_ms": 5.0,
+    "status_stream": false
+  },
+  "devices": [
+    {
+      "name": "Axon",
+      "match": {},
+      "udp_port": 50043,
+      "fs": 500.0,
+      "n_channels": 8,
+      "stream_name": "Synaptic Axon",
+      "stream_type": "EMG",
+      "source_id": "synaptic-bridge",
+      "publish_raw": false,
+      "timestamps": "arrival",
+      "fill_gaps": true,
+      "max_gap_packets": 100,
+      "pipeline": [
+        {
+          "type": "car",
+          "enabled": true
+        },
+        {
+          "type": "whitening",
+          "enabled": true,
+          "time_constant": 100.0,
+          "refresh_every": 600,
+          "shrinkage": 0.002,
+          "subtract_mean": true,
+          "adapt": true
+        },
+        {
+          "type": "lowpass",
+          "enabled": true,
+          "family": "butter",
+          "order": 2,
+          "cutoff": 117.0,
+          "ripple": 1.0,
+          "attenuation": 40.0
+        },
+        {
+          "type": "custom",
+          "enabled": true,
+          "file": "absolute.py",
+          "params": {
+            "abs": 1.0
+          }
+        }
+      ]
+    }
+  ]
+}

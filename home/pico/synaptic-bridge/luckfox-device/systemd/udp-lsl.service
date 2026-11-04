@@ -1,0 +1,33 @@
+[Unit]
+Description=Synaptic Bridge - puente UDP -> LSL (Luckfox)
+# Asegura que el AP WiFi (hostapd/dnsmasq) esté listo antes de arrancar
+After=network-online.target hostapd.service dnsmasq.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pico
+WorkingDirectory=/home/pico/synaptic-bridge/luckfox-device
+
+# Valores especificos de ESTE dispositivo (IP/subred del AP, interfaz, etc.).
+# Este archivo NO se versiona: cada Luckfox tiene el suyo propio.
+# Ver docs/04-configuracion-red.md y network/device.env.example
+EnvironmentFile=/etc/synaptic-bridge/device.env
+
+# Los comandos con '+' corren como root aunque el servicio corra como 'pico'.
+# AP_IFACE y AP_IP vienen de /etc/synaptic-bridge/device.env (por dispositivo).
+ExecStartPre=+/sbin/ip addr replace ${AP_IP} dev ${AP_IFACE}
+ExecStartPre=+/sbin/ip link set ${AP_IFACE} up
+ExecStartPre=+/usr/bin/systemctl restart dnsmasq
+ExecStartPre=+/usr/bin/systemctl restart hostapd
+# Log de leases DHCP actuales, util para depurar quien esta conectado
+ExecStartPre=+/usr/bin/cat /var/lib/misc/dnsmasq.leases
+
+ExecStart=/usr/bin/python3 /home/pico/synaptic-bridge/luckfox-device/udp_to_lsl_bridge.py \
+    --config /etc/synaptic-bridge/bridge_config.json
+
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,45 @@
+{
+  "_comment": "Config del puente v2. Las claves que empiezan por '_' se ignoran (sirven de comentario).",
+  "bridge": {
+    "host": "0.0.0.0",
+    "rcvbuf_bytes": 4194304,
+    "max_buffered_s": 30,
+    "stats_interval_s": 5,
+    "stage_time_budget_ms": 5,
+    "status_stream": true
+  },
+  "devices": [
+    {
+      "name": "brazo_izq",
+      "_match": "IP del ESP32. Fíjala con una reserva DHCP por MAC en dnsmasq.",
+      "match": {"ip": "192.168.11.27"},
+      "udp_port": 50043,
+      "fs": 1000,
+      "n_channels": 8,
+      "stream_name": "BioMyo_EMG_brazoIzq",
+      "source_id": "sb11-brazoIzq",
+      "publish_raw": true,
+      "pipeline": [
+        {"type": "highpass", "family": "butter", "order": 4, "cutoff": 20},
+        {"type": "notch", "freq": 60, "quality": 30, "harmonics": 3},
+        {"type": "car", "channels": [1, 2, 3, 4]}
+      ]
+    },
+    {
+      "name": "brazo_der",
+      "match": {"ip": "192.168.11.28"},
+      "udp_port": 50043,
+      "fs": 1000,
+      "n_channels": 8,
+      "stream_name": "BioMyo_EMG_brazoDer",
+      "source_id": "sb11-brazoDer",
+      "publish_raw": true,
+      "pipeline": [
+        {"type": "bandpass", "family": "butter", "order": 4, "low": 20, "high": 450},
+        {"type": "notch", "freq": 60, "quality": 30, "channels": [1, 2]},
+        {"type": "whitening", "time_constant": 2.0, "enabled": false},
+        {"type": "custom", "file": "envolvente_rms.py", "params": {"window_ms": 100}, "enabled": false}
+      ]
+    }
+  ]
+}

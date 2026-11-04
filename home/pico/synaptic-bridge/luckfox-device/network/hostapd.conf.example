@@ -1,0 +1,30 @@
+# hostapd.conf — plantilla del punto de acceso WiFi de ESTE Luckfox.
+#
+# NO uses este archivo tal cual en más de un dispositivo: SSID y canal deben
+# ser únicos por Luckfox para que dos unidades encendidas cerca no choquen ni
+# confundan a las PCs que se conectan. Genera la versión real con
+# network/generate-device-network.sh (ver docs/04-configuracion-red.md).
+#
+# Destino en el Luckfox: /etc/hostapd/hostapd.conf
+
+interface=__AP_IFACE__
+driver=nl80211
+
+# Nombre de red WiFi — DEBE ser único por dispositivo/usuario.
+# Convención sugerida: Synaptic-<nombre_usuario_o_id>
+ssid=__AP_SSID__
+
+hw_mode=g
+# Canal 2.4GHz — si hay varios Luckfox cerca, usa canales distintos
+# (1, 6 y 11 no se solapan) para evitar interferencia entre APs.
+channel=__AP_CHANNEL__
+
+# Seguridad WPA2-PSK. La contraseña también debe ser única por dispositivo.
+wpa=2
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+wpa_passphrase=__AP_PASSPHRASE__
+
+ignore_broadcast_ssid=0
+macaddr_acl=0
+auth_algs=1

@@ -1,0 +1,32 @@
+{
+  "host": "0.0.0.0",
+  "udp_port": 50043,
+  "fs": 500.0,
+  "n_channels": 8,
+  "stream_name": "Synaptic Axon",
+  "stream_type": "EMG",
+  "source_id": "synaptic-bridge",
+  "filters": {
+    "highpass": {
+      "enabled": true,
+      "family": "butter",
+      "order": 2,
+      "cutoff": 10.0,
+      "ripple": 4.0,
+      "attenuation": 40.0
+    },
+    "lowpass": {
+      "enabled": true,
+      "family": "butter",
+      "order": 2,
+      "cutoff": 150.0,
+      "ripple": 1.0,
+      "attenuation": 40.0
+    },
+    "notch": {
+      "enabled": true,
+      "freq": 60.0,
+      "quality": 28.0
+    }
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "bridge": {
+    "rcvbuf_bytes": 4194304,
+    "max_buffered_s": 30,
+    "stats_interval_s": 5.0,
+    "stage_time_budget_ms": 5.0,
+    "status_stream": false
+  },
+  "devices": [
+    {
+      "name": "Synaptic Axon1",
+      "match": {},
+      "udp_port": 50043,
+      "fs": 500.0,
+      "n_channels": 8,
+      "stream_name": "Synaptic Axon1",
+      "stream_type": "EMG",
+      "source_id": "b-A2",
+      "publish_raw": true,
+      "timestamps": "counter",
+      "fill_gaps": true,
+      "max_gap_packets": 100,
+      "pipeline": [
+        {
+          "type": "whitening",
+          "enabled": true,
+          "time_constant": 120.0,
+          "refresh_every": 1000,
+          "shrinkage": 0.001,
+          "subtract_mean": true,
+          "adapt": true
+        },
+        {
+          "type": "lowpass",
+          "enabled": true,
+          "family": "butter",
+          "order": 4,
+          "cutoff": 200.0,
+          "ripple": 1.0,
+          "attenuation": 40.0
+        }
+      ]
+    },
+    {
+      "name": "Synaptic Axon2",
+      "match": {},
+      "udp_port": 50044,
+      "fs": 500.0,
+      "n_channels": 8,
+      "stream_name": "Synaptic Axon2",
+      "stream_type": "EMG",
+      "source_id": "b-A1",
+      "publish_raw": true,
+      "timestamps": "counter",
+      "fill_gaps": true,
+      "max_gap_packets": 100,
+      "pipeline": [
+        {
+          "type": "whitening",
+          "enabled": true,
+          "time_constant": 120.0,
+          "refresh_every": 1000,
+          "shrinkage": 0.001,
+          "subtract_mean": true,
+          "adapt": true
+        },
+        {
+          "type": "lowpass",
+          "enabled": true,
+          "family": "butter",
+          "order": 4,
+          "cutoff": 200.0,
+          "ripple": 1.0,
+          "attenuation": 40.0
+        }
+      ]
+    },
+    {
+      "name": "Synaptic Dendrite",
+      "match": {},
+      "udp_port": 60000,
+      "fs": 200.0,
+      "n_channels": 11,
+      "stream_name": "Dendrite",
+      "stream_type": "EMG",
+      "publish_raw": false,
+      "timestamps": "counter",
+      "fill_gaps": true,
+      "max_gap_packets": 100,
+      "pipeline": []
+    }
+  ]
+}
