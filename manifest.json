@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.04-1625",
+  "version": "2026.11.04-1629",
   "bridge_api": 2,
   "min_gui": "2.3.0",
   "notes": "BridgeUpdate snapshot: bridge, plugins, cortex.",
