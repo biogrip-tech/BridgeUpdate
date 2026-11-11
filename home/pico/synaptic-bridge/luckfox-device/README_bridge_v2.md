@@ -14,9 +14,10 @@ de Python propias.
 | `pipeline.py` | Etapas del pipeline y su validación |
 | `filter_chain.py` | Diseño de los filtros IIR (lo usa `pipeline.py`) |
 | `euclidean_align.py` | Blanqueo / alineamiento euclidiano (lo usa la etapa `whitening`) |
-| `plugins/envolvente_rms.py` | Plugin de ejemplo |
-| `config/bridge_config.example.json` | Config de ejemplo con dos dispositivos |
-| `tools/fake_esp32.py` | Simulador de ESP32 para hacer pruebas sin hardware |
+| `envolvente_rms.py` | Plugin de ejemplo (se instala en `/etc/synaptic-bridge/plugins/`) |
+| `config/bridge_config.example.json` | Default v2 de un dispositivo (lo copia `install.sh`) |
+| `bridge_config.example.json` | Ejemplo multi-dispositivo |
+| `fake_esp32.py` | Simulador de ESP32 para hacer pruebas sin hardware |
 
 Los cuatro primeros deben estar juntos en la misma carpeta del Luckfox.
 
@@ -59,6 +60,10 @@ con los filtros fijos, sin stream crudo.
 | `stage_time_budget_ms` | `5` | Aviso si una etapa tarda más de esto por paquete |
 | `status_stream` | `true` | Publicar el stream de estado |
 | `status_stream_name` | `SynapticBridge_status_<host>` | Nombre del stream de estado |
+| `discovery_enabled` | `true` | Escribir el JSON de descubrimiento de orígenes UDP |
+| `discovery_path` | `/tmp/synaptic-bridge-discovery.json` | Ruta del JSON de descubrimiento |
+| `discovery_interval_s` | `1` | Cada cuánto se reescribe el JSON |
+| `discovery_stale_s` | `120` | Segundos sin paquetes para olvidar un origen |
 | `plugins_dir` | `<carpeta de la config>/plugins` | Dónde buscar los plugins |
 | `data_dir` | `<carpeta de la config>` | Dónde buscar las referencias `.npz` |
 
@@ -135,7 +140,7 @@ def process(window, state):         # obligatorio, se llama con cada paquete
 ```
 
 `window` tiene forma `(n_muestras, n_canales_seleccionados)`, en float64, y es
-una copia. Ver `plugins/envolvente_rms.py`.
+una copia. Ver el plugin de ejemplo `envolvente_rms.py`.
 
 Si un plugin lanza una excepción, devuelve una forma distinta o produce
 `NaN`/`Inf`, esa etapa se desactiva y la señal sigue sin ella. El stream crudo
@@ -177,33 +182,46 @@ porcentaje, desbordamientos de cola, paquetes inválidos, IP de origen,
 segundos desde el último paquete, y tiempo medio y máximo de cada etapa.
 Es lo que usará la GUI para mostrar el estado en vivo.
 
+## Descubrimiento de orígenes UDP
+
+El puente registra cada combinación IP:puerto que le envía paquetes, aunque no
+esté en `devices`. No publica streams provisionales ni modifica la config:
+solo escribe un JSON (por defecto `/tmp/synaptic-bridge-discovery.json`) cada
+`discovery_interval_s`. Cada origen incluye IP, puerto, canales, muestras por
+paquete, tasa estimada, antigüedad y el dispositivo de la config al que quedó
+asignado.
+
+Esto permite que la GUI detecte un segundo equipo en un puerto que ya tiene un
+dispositivo catch-all (`"match": {}`), sin exponer IPs ni puertos al usuario.
+Si un origen deja de enviar durante `discovery_stale_s`, desaparece del JSON.
+
 ## Pruebas sin hardware
 
 En la PC o en el Luckfox:
 
 ```bash
-python3 tools/fake_esp32.py --target 192.168.11.1                 # un ESP32
-python3 tools/fake_esp32.py --target 192.168.11.1 --loss 0.02     # con 2 % de pérdidas
+python3 fake_esp32.py --target 192.168.11.1                 # un ESP32
+python3 fake_esp32.py --target 192.168.11.1 --loss 0.02     # con 2 % de pérdidas
 ```
 
 Para simular dos ESP32 desde una sola máquina Linux (IPs de origen distintas):
 
 ```bash
-python3 tools/fake_esp32.py --target 127.0.0.1 --bind-ip 127.0.0.2 &
-python3 tools/fake_esp32.py --target 127.0.0.1 --bind-ip 127.0.0.3 &
+python3 fake_esp32.py --target 127.0.0.1 --bind-ip 127.0.0.2 &
+python3 fake_esp32.py --target 127.0.0.1 --bind-ip 127.0.0.3 &
 ```
 
 con dos dispositivos en la config con `match.ip` `127.0.0.2` y `127.0.0.3`.
 
 ## Migrar un Luckfox existente
 
-1. Copia `udp_to_lsl_bridge.py`, `pipeline.py`, `euclidean_align.py` y la
-   carpeta `plugins/` a `/home/pico/synaptic-bridge/luckfox-device/`.
+1. Copia `udp_to_lsl_bridge.py`, `pipeline.py`, `filter_chain.py` y
+   `euclidean_align.py` a `/home/pico/synaptic-bridge/luckfox-device/`.
 2. Crea `/etc/synaptic-bridge/plugins/` y copia ahí los plugins.
 3. Escribe la config nueva en `/etc/synaptic-bridge/bridge_config.json` y
    valídala con `--check`.
 4. `sudo systemctl restart udp-lsl` (solo esta vez).
 
-Mientras la GUI no esté actualizada, **no uses su botón "Aplicar"** en un
-Luckfox con config v2: la GUI escribe el formato antiguo y sobrescribiría la
-config de varios dispositivos.
+GUI11 ya escribe y valida el formato v2. En GUIs anteriores, **no uses su
+botón "Aplicar"** en un Luckfox con config v2: escribirían el formato antiguo
+y sobrescribirían la config de varios dispositivos.

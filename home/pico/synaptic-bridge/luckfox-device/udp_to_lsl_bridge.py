@@ -68,6 +68,10 @@ GLOBAL_DEFAULTS = {
     "status_stream_name": None,        # por defecto: SynapticBridge_status_<hostname>
     "plugins_dir": None,               # por defecto: <carpeta de la config>/plugins
     "data_dir": None,                  # por defecto: carpeta de la config
+    "discovery_enabled": True,         # escribe un JSON con los orígenes UDP vistos
+    "discovery_path": "/tmp/synaptic-bridge-discovery.json",
+    "discovery_interval_s": 1.0,
+    "discovery_stale_s": 120.0,
 }
 
 DEVICE_DEFAULTS = {
@@ -103,6 +107,12 @@ class ConfigError(Exception):
 def _clean(d):
     """Quita claves de comentario ("_comment", "_nota"...)."""
     return {k: v for k, v in d.items() if not str(k).startswith("_")}
+
+
+def _as_bool(value):
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on", "si", "sí")
+    return bool(value)
 
 
 def load_config(path, legacy_overrides=None):
@@ -151,8 +161,13 @@ def normalize_config(raw, path, legacy_overrides=None):
     g["status_stream_name"] = g["status_stream_name"] or f"SynapticBridge_status_{HOSTNAME}"
     for key in ("rcvbuf_bytes", "queue_size"):
         g[key] = int(g[key])
-    for key in ("max_buffered_s", "stats_interval_s", "stage_time_budget_ms"):
+    for key in ("max_buffered_s", "stats_interval_s", "stage_time_budget_ms",
+                "discovery_interval_s", "discovery_stale_s"):
         g[key] = float(g[key])
+    g["discovery_enabled"] = _as_bool(g["discovery_enabled"])
+    g["discovery_path"] = str(g["discovery_path"] or "")
+    g["discovery_interval_s"] = max(0.5, g["discovery_interval_s"])
+    g["discovery_stale_s"] = max(5.0, g["discovery_stale_s"])
 
     if not isinstance(devs_raw, list) or not devs_raw:
         raise ConfigError("'devices' debe ser una lista con al menos un dispositivo")
@@ -524,16 +539,134 @@ class DeviceWorker(threading.Thread):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Descubrimiento: orígenes UDP vistos, aunque no estén en la config
+# ═══════════════════════════════════════════════════════════════════════════
+class DiscoveryRegistry:
+    """Registra los orígenes UDP sin publicar streams ni tocar la config.
+
+    La GUI lee el JSON resultante para emparejar hardware nuevo. Se guarda una
+    entrada por (IP, puerto), así que un segundo equipo en un puerto que ya
+    tiene un dispositivo catch-all aparece como origen separado.
+    """
+
+    def __init__(self, stale_s=120.0, max_sources=256):
+        self.stale_s = float(stale_s)
+        self.max_sources = int(max_sources)
+        self._lock = threading.Lock()
+        self._sources = {}
+        self._devices = {}
+
+    def observe(self, ip, port, packet, t_seen, device_name=None):
+        if len(packet) < HEADER_SIZE:
+            return
+        try:
+            _counter, n_ch, n_samp = struct.unpack_from(HEADER_FMT, packet, 0)
+        except struct.error:
+            return
+        if n_ch <= 0 or n_ch > 64 or n_samp <= 0 or n_samp > 100000:
+            return
+        key = (str(ip), int(port))
+        with self._lock:
+            rec = self._sources.get(key)
+            if rec is None:
+                self._prune_locked(t_seen)
+                if len(self._sources) >= self.max_sources:
+                    return
+                rec = {
+                    "ip": key[0], "port": key[1], "packets": 0, "samples": 0,
+                    "channels": n_ch, "samples_per_packet": n_samp,
+                    "first_seen": t_seen, "last_seen": t_seen,
+                    "device": None, "rate_sps": 0.0,
+                    "_win_start": t_seen, "_win_samples": 0,
+                }
+                self._sources[key] = rec
+            rec["packets"] += 1
+            rec["samples"] += n_samp
+            rec["channels"] = n_ch
+            rec["samples_per_packet"] = n_samp
+            rec["last_seen"] = t_seen
+            if device_name:
+                rec["device"] = device_name
+                dev = self._devices.get(device_name)
+                if dev is None:
+                    dev = {"name": device_name, "port": key[1], "ips": {},
+                           "last_seen": t_seen}
+                    self._devices[device_name] = dev
+                dev["port"] = key[1]
+                dev["last_seen"] = t_seen
+                seen = dev["ips"].get(key[0])
+                if seen is None:
+                    seen = {"ip": key[0], "first_seen": t_seen,
+                            "last_seen": t_seen, "packets": 0}
+                    dev["ips"][key[0]] = seen
+                seen["last_seen"] = t_seen
+                seen["packets"] += 1
+            elapsed = t_seen - rec["_win_start"]
+            rec["_win_samples"] += n_samp
+            if elapsed >= 1.0:
+                rec["rate_sps"] = rec["_win_samples"] / elapsed
+                rec["_win_start"] = t_seen
+                rec["_win_samples"] = 0
+            elif elapsed >= 0.25:
+                # Estimación provisional para ráfagas cortas de descubrimiento.
+                rec["rate_sps"] = rec["_win_samples"] / elapsed
+
+    def _prune_locked(self, now):
+        cutoff = now - self.stale_s
+        for key in [k for k, r in self._sources.items()
+                    if r["last_seen"] < cutoff]:
+            self._sources.pop(key, None)
+        for name in list(self._devices):
+            dev = self._devices[name]
+            for ip in [i for i, r in dev["ips"].items()
+                       if r["last_seen"] < cutoff]:
+                dev["ips"].pop(ip, None)
+            if not dev["ips"] or dev["last_seen"] < cutoff:
+                self._devices.pop(name, None)
+
+    def snapshot(self, now=None):
+        now = time.monotonic() if now is None else float(now)
+        with self._lock:
+            self._prune_locked(now)
+            sources = []
+            for rec in sorted(self._sources.values(),
+                              key=lambda r: r["last_seen"], reverse=True):
+                item = {k: v for k, v in rec.items()
+                        if not k.startswith("_") and k not in
+                        ("first_seen", "last_seen")}
+                item["age_s"] = round(max(0.0, now - rec["last_seen"]), 1)
+                item["seen_for_s"] = round(max(0.0, now - rec["first_seen"]), 1)
+                sources.append(item)
+            devices = []
+            for dev in sorted(self._devices.values(), key=lambda d: d["name"]):
+                ips = []
+                for rec in sorted(dev["ips"].values(),
+                                  key=lambda r: r["first_seen"]):
+                    ips.append({
+                        "ip": rec["ip"],
+                        "packets": rec["packets"],
+                        "age_s": round(max(0.0, now - rec["last_seen"]), 1),
+                        "seen_for_s": round(max(0.0, now - rec["first_seen"]), 1),
+                    })
+                devices.append({
+                    "name": dev["name"], "port": dev["port"], "ips": ips,
+                    "age_s": round(max(0.0, now - dev["last_seen"]), 1),
+                })
+            return {"sources": sources, "devices": devices}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Recepción: un hilo por puerto UDP, solo lee y reparte
 # ═══════════════════════════════════════════════════════════════════════════
 class Receiver(threading.Thread):
     UNKNOWN_LOG_EVERY_S = 30.0
 
-    def __init__(self, host, port, rcvbuf):
+    def __init__(self, host, port, rcvbuf, registry=None):
         super().__init__(daemon=True, name=f"rx-{port}")
         self.host, self.port = host, port
         self._stop_ev = threading.Event()
         self.routes = ({}, None)       # (ip -> worker, worker para cualquier IP)
+        self.registry = registry
         self._unknown_last = {}
         self.unknown_packets = 0
 
@@ -576,6 +709,11 @@ class Receiver(threading.Thread):
             t_arrival = local_clock()
             by_ip, catch_all = self.routes
             worker = by_ip.get(addr[0]) or catch_all
+            if self.registry is not None:
+                self.registry.observe(
+                    addr[0], self.port, data, time.monotonic(),
+                    worker.name_ if worker is not None else None,
+                )
             if worker is None:
                 self._log_unknown(addr[0])
                 continue
@@ -606,6 +744,7 @@ class Bridge:
         self.cfg = None
         self.stop_ev = threading.Event()
         self.status_outlet = None
+        self.discovery = DiscoveryRegistry()
         self._cfg_mtime = None
         self._watched = {}       # nombre -> {archivo: mtime}
 
@@ -623,6 +762,7 @@ class Bridge:
 
     def apply(self, cfg, initial=False):
         g = cfg["bridge"]
+        self.discovery.stale_s = float(g["discovery_stale_s"])
         old_g = self.cfg["bridge"] if self.cfg else None
         new_devs = {d["name"]: d for d in cfg["devices"]}
 
@@ -660,7 +800,7 @@ class Bridge:
             if port in self.receivers:
                 continue
             try:
-                r = Receiver(g["host"], port, g["rcvbuf_bytes"])
+                r = Receiver(g["host"], port, g["rcvbuf_bytes"], self.discovery)
             except OSError as e:
                 msg = f"no se pudo abrir {g['host']}:{port}: {e}"
                 if initial:
@@ -710,6 +850,8 @@ class Bridge:
         interval = self.cfg["bridge"]["stats_interval_s"]
         next_stats = time.monotonic() + interval
         last_stats = time.monotonic()
+        disc_interval = self.cfg["bridge"]["discovery_interval_s"]
+        next_disc = time.monotonic() + disc_interval
         while not self.stop_ev.wait(1.0):
             self._check_reload()
             now = time.monotonic()
@@ -718,6 +860,10 @@ class Bridge:
                 last_stats = now
                 interval = self.cfg["bridge"]["stats_interval_s"]
                 next_stats = now + interval
+            if self.cfg["bridge"]["discovery_enabled"] and now >= next_disc:
+                self._write_discovery()
+                disc_interval = self.cfg["bridge"]["discovery_interval_s"]
+                next_disc = now + disc_interval
         self.shutdown()
 
     def _check_reload(self):
@@ -741,6 +887,23 @@ class Bridge:
                 log.info("[%s] cambió un plugin o referencia: recargando pipeline", name)
                 w.request_pipeline(w.cfg["pipeline"])
             self._watched[name] = current
+
+    def _write_discovery(self):
+        path = self.cfg["bridge"].get("discovery_path")
+        if not path:
+            return
+        payload = {"host": HOSTNAME, "time": time.time()}
+        payload.update(self.discovery.snapshot())
+        try:
+            directory = os.path.dirname(os.path.abspath(path))
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            os.replace(tmp, path)
+        except OSError as e:
+            log.warning("no se pudo escribir el descubrimiento %s: %s", path, e)
 
     def _report(self, interval_s):
         g = self.cfg["bridge"]
