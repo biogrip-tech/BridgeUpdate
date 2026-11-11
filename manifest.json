@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.04-1634",
+  "version": "2026.11.10-2108",
   "bridge_api": 2,
   "min_gui": "2.3.0",
   "notes": "BridgeUpdate snapshot: bridge, plugins, cortex.",
@@ -80,7 +80,7 @@
     },
     {
       "path": "home/pico/synaptic-bridge/luckfox-device/README_bridge_v2.md",
-      "sha256": "45ee1d1f9ead542f721174c7e743f9851a71f32cf619fdab1a52028885c02513"
+      "sha256": "558fdd48762c6e806906b8b95ee84ad3e00a9839ab91ddc8dcda29b06ba3fa42"
     },
     {
       "path": "home/pico/synaptic-bridge/luckfox-device/bridge_config.example.json",
@@ -144,15 +144,12 @@
     },
     {
       "path": "home/pico/synaptic-bridge/luckfox-device/udp_to_lsl_bridge.py",
-      "sha256": "c9b63329bbb6603040f0fb88a49906163fc90ec1124aef50ee638d94f4f5edbc"
+      "sha256": "4e5189c2b089d36848062d1649396f43fac64d2822bb84516c80f022bf94ea88"
     },
     {
       "path": "home/pico/synaptic_cortex/euclidean_align.py",
       "sha256": "150b1354152bbe987b03a11bb5f6c16fbaf3feef7b7c73d24958827d9cf1adf2"
     }
   ],
-  "removed": [
-    "etc/synaptic-bridge/plugins/add_noise.py",
-    "home/pico/synaptic-bridge/luckfox-device/Borrrar"
-  ]
+  "removed": []
 }
