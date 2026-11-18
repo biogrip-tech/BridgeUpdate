@@ -18,6 +18,7 @@ de Python propias.
 | `config/bridge_config.example.json` | Default v2 de un dispositivo (lo copia `install.sh`) |
 | `bridge_config.example.json` | Ejemplo multi-dispositivo |
 | `fake_esp32.py` | Simulador de ESP32 para hacer pruebas sin hardware |
+| `lsl_diagnose.py` | Diagnóstico desde la PC: streams duplicados y pérdidas por stream |
 
 Los cuatro primeros deben estar juntos en la misma carpeta del Luckfox.
 
@@ -64,6 +65,8 @@ con los filtros fijos, sin stream crudo.
 | `discovery_path` | `/tmp/synaptic-bridge-discovery.json` | Ruta del JSON de descubrimiento |
 | `discovery_interval_s` | `1` | Cada cuánto se reescribe el JSON |
 | `discovery_stale_s` | `120` | Segundos sin paquetes para olvidar un origen |
+| `catch_all_hold_s` | `3` | Un dispositivo con `match` vacío se engancha al primer ESP32 que le envía; otra IP en ese puerto se descarta hasta que el primero lleve este tiempo sin enviar |
+| `lsl_conflict_check_s` | `30` | Cada cuánto se buscan en la red streams LSL con el mismo nombre o `source_id` que los nuestros (`0` = no buscar) |
 | `plugins_dir` | `<carpeta de la config>/plugins` | Dónde buscar los plugins |
 | `data_dir` | `<carpeta de la config>` | Dónde buscar las referencias `.npz` |
 
@@ -194,6 +197,54 @@ asignado.
 Esto permite que la GUI detecte un segundo equipo en un puerto que ya tiene un
 dispositivo catch-all (`"match": {}`), sin exponer IPs ni puertos al usuario.
 Si un origen deja de enviar durante `discovery_stale_s`, desaparece del JSON.
+
+## Diagnóstico de pérdidas con varios ESP32
+
+**Un dispositivo con `"match": {}` acepta UN solo ESP32.** Antes, si dos ESP32
+enviaban al mismo puerto y la config tenía un único dispositivo catch-all,
+sus paquetes se mezclaban en el mismo stream: el contador saltaba hacia
+delante y atrás en cada paquete (re-sincronizaciones continuas, ~90 % de
+"perdidos" en las estadísticas, timestamps rotos y el estado de los filtros
+contaminado). Ahora el catch-all se engancha al primero y el resto se
+descarta con un aviso en el log. Con varios ESP32, crea un dispositivo por
+ESP32 con su `match.ip` (y una reserva DHCP para cada uno), o usa un puerto
+distinto por ESP32.
+
+**Una sola instancia del puente por Luckfox.** El socket ya no usa
+`SO_REUSEADDR`: antes, una segunda instancia (el servicio más una ejecución a
+mano, o un proceso colgado) abría el mismo puerto sin error y se quedaba con
+los paquetes, mientras la primera seguía publicando un stream LSL con el
+mismo nombre y `source_id`, vivo pero vacío. Ahora la segunda instancia no
+arranca y lo dice (`sudo ss -ulpn | grep 50043` muestra quién tiene el puerto).
+
+**Dónde se pierde cada muestra.** El log (y el stream de estado) separa las
+causas:
+
+| Mensaje / contador | Dónde se perdió |
+| --- | --- |
+| `origen IP:puerto: N de M paquetes NO llegaron al Luckfox` | Wi-Fi o ESP32 (el contador del paquete tiene huecos al recibirlo) |
+| `el kernel descartó N datagramas` (`ports.kernel_drops`) | Búfer del socket lleno: el puente no lee a tiempo |
+| `cola_llena` (`queue_overflow`) | El pipeline del dispositivo es más lento que los datos |
+| `ESP32 rechazados` (`ports.foreign_packets`) | Un segundo ESP32 en un puerto catch-all ya ocupado |
+| `CONFLICTO LSL` | Otro stream en la red con el mismo nombre o `source_id` |
+
+Si nada de eso aparece y el consumidor aun así pierde muestras, el problema
+está en el lado LSL/PC. Para comprobarlo desde la PC:
+
+```bash
+python3 lsl_diagnose.py --seconds 30
+```
+
+Lista todos los streams, marca nombres y `source_id` repetidos, y mide en cada
+stream la tasa real, las filas `NaN` (paquetes rellenados por el puente) y
+los huecos de timestamp. Para que los huecos se rellenen con `NaN` hace falta
+`"timestamps": "counter"` y `"fill_gaps": true`; con `"arrival"` las pérdidas
+solo se ven como saltos de tiempo.
+
+Usa `stream_name` y `source_id` únicos por Luckfox **y** por dispositivo. Si
+todos los Luckfox tienen el mismo `source_id` (por ejemplo
+`"synaptic-bridge"`) o el mismo hostname, un consumidor que se reconecta puede
+acabar en el stream de otro Luckfox.
 
 ## Pruebas sin hardware
 
