@@ -38,6 +38,8 @@ def main():
     ap.add_argument("--freq", type=float, default=60.0, help="frecuencia de la senoide de prueba (Hz)")
     ap.add_argument("--loss", type=float, default=0.0, help="fracción de paquetes a 'perder'")
     ap.add_argument("--seconds", type=float, default=0.0, help="duración (0 = infinito)")
+    ap.add_argument("--int16", action="store_true",
+                    help="muestras en int16 (como un ADC de 12 bits) en vez de float32")
     args = ap.parse_args()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -47,17 +49,27 @@ def main():
     counter, n = 0, 0
     t0 = time.monotonic()
     rng = np.random.default_rng()
+    size = 8 + args.samples * args.channels * (2 if args.int16 else 4)
     print(f"enviando a {args.target}:{args.port} | {args.channels} canales, {args.fs:g} Hz, "
-          f"{args.samples} muestras/paquete ({1 / period:.1f} paquetes/s)")
+          f"{args.samples} muestras/paquete ({1 / period:.1f} paquetes/s, {size} bytes, "
+          f"{'int16' if args.int16 else 'float32'})")
+    if size > 1472:
+        print("AVISO: el paquete supera 1472 bytes y se fragmentará en IP")
     try:
         while True:
             t = (n + np.arange(args.samples)) / args.fs
             sine = 100.0 * np.sin(2 * np.pi * args.freq * t)[:, None]
             offset = np.arange(args.channels)[None, :] * 10.0     # DC distinto por canal
             noise = rng.standard_normal((args.samples, args.channels)) * 20.0
-            window = (sine + offset + noise).astype("<f4")
+            window = sine + offset + noise
+            n_ch_field = args.channels
+            if args.int16:
+                window = np.clip(np.round(window + 2048), 0, 4095).astype("<i2")
+                n_ch_field |= 0x8000          # FLAG_INT16
+            else:
+                window = window.astype("<f4")
             if random.random() >= args.loss:
-                header = struct.pack("<IHH", counter & 0xFFFFFFFF, args.channels, args.samples)
+                header = struct.pack("<IHH", counter & 0xFFFFFFFF, n_ch_field, args.samples)
                 sock.sendto(header + window.tobytes(), (args.target, args.port))
             counter += 1
             n += args.samples

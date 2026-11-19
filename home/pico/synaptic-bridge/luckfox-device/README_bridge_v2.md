@@ -198,6 +198,34 @@ Esto permite que la GUI detecte un segundo equipo en un puerto que ya tiene un
 dispositivo catch-all (`"match": {}`), sin exponer IPs ni puertos al usuario.
 Si un origen deja de enviar durante `discovery_stale_s`, desaparece del JSON.
 
+## Formato del paquete UDP
+
+```
+uint32 counter      // +1 por paquete (el puente detecta pérdidas con él)
+uint16 nChannels    // bit 15 (0x8000) = muestras int16; si no, float32
+uint16 nSamples
+muestras[nSamples * nChannels]   // sample-major, little-endian
+```
+
+- **float32** (formato original): `nChannels` = número de canales.
+- **int16**: `nChannels = canales | 0x8000`. El puente convierte a float32
+  sin escalar, así que el stream LSL lleva los mismos valores (cuentas del
+  ADC). Ocupa la mitad: con un ADC de 12 bits no se pierde resolución.
+
+El puente acepta los dos formatos a la vez (cada ESP32 puede usar el suyo) y
+el número de muestras por paquete lo lee de cada paquete. Un puente antiguo
+descarta los paquetes int16 como inválidos, así que **actualiza el puente
+antes que el firmware**. El JSON de descubrimiento indica el `format` de cada
+origen.
+
+Para ocupar menos el Wi-Fi conviene **menos paquetes más grandes**, sin pasar
+de **1472 bytes** por datagrama (si no, IP lo fragmenta y perder un fragmento
+pierde el paquete entero): con 8 canales, hasta 45 muestras por paquete en
+float32 o 91 en int16. El firmware del Axon usa int16 con 40 muestras
+(648 bytes, 12,5 paquetes/s a 500 Hz, 80 ms por paquete).
+
+Para probar: `python3 fake_esp32.py --target 192.168.11.1 --int16 --samples 40`.
+
 ## Diagnóstico de pérdidas con varios ESP32
 
 **Un dispositivo con `"match": {}` acepta UN solo ESP32.** Antes, si dos ESP32

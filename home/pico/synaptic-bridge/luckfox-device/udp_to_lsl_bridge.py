@@ -55,6 +55,10 @@ log = logging.getLogger("bridge")
 
 HEADER_FMT = "<IHH"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)   # = 8 bytes
+# Bit 15 de nChannels: las muestras vienen en int16 (little-endian) en vez de
+# float32. Paquete la mitad de grande (ADC de 12 bits del Axon). Un puente
+# antiguo ve >64 canales y descarta el paquete como inválido (no lee basura).
+FLAG_INT16 = 0x8000
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/bridge_config.json")
 HOSTNAME = socket.gethostname()
 
@@ -267,20 +271,38 @@ def device_identity(dcfg, gcfg):
 # ═══════════════════════════════════════════════════════════════════════════
 # Utilidades
 # ═══════════════════════════════════════════════════════════════════════════
-def parse_packet(packet):
-    """Devuelve (counter, ventana float32 (n_muestras, n_canales)) o None."""
+def decode_header(packet):
+    """Devuelve (counter, n_canales, n_muestras, dtype) o None si no es válido.
+    dtype es "<f4" (formato original) o "<i2" (bit FLAG_INT16 activo)."""
     if len(packet) < HEADER_SIZE:
         return None
     counter, n_ch, n_samp = struct.unpack_from(HEADER_FMT, packet, 0)
+    dtype = "<f4"
+    if n_ch & FLAG_INT16:
+        n_ch &= ~FLAG_INT16 & 0xFFFF
+        dtype = "<i2"
     if n_ch <= 0 or n_ch > 64 or n_samp <= 0 or n_samp > 100000:
         return None
-    avail_floats = (len(packet) - HEADER_SIZE) // 4
-    use = min(n_samp * n_ch, avail_floats)
+    return counter, n_ch, n_samp, dtype
+
+
+def parse_packet(packet):
+    """Devuelve (counter, ventana float32 (n_muestras, n_canales)) o None.
+    Acepta muestras float32 o int16 (se convierten a float32 sin escalar)."""
+    hdr = decode_header(packet)
+    if hdr is None:
+        return None
+    counter, n_ch, n_samp, dtype = hdr
+    itemsize = np.dtype(dtype).itemsize
+    avail = (len(packet) - HEADER_SIZE) // itemsize
+    use = min(n_samp * n_ch, avail)
     use -= use % n_ch
     if use <= 0:
         return None
-    floats = np.frombuffer(packet, dtype=np.float32, count=use, offset=HEADER_SIZE)
-    return counter, floats.reshape(use // n_ch, n_ch)
+    vals = np.frombuffer(packet, dtype=dtype, count=use, offset=HEADER_SIZE)
+    if dtype != "<f4":
+        vals = vals.astype(np.float32)
+    return counter, vals.reshape(use // n_ch, n_ch)
 
 
 def push_chunk(outlet, data, ts):
@@ -604,14 +626,10 @@ class DiscoveryRegistry:
         self._devices = {}
 
     def observe(self, ip, port, packet, t_seen, device_name=None):
-        if len(packet) < HEADER_SIZE:
+        hdr = decode_header(packet)
+        if hdr is None:
             return
-        try:
-            counter, n_ch, n_samp = struct.unpack_from(HEADER_FMT, packet, 0)
-        except struct.error:
-            return
-        if n_ch <= 0 or n_ch > 64 or n_samp <= 0 or n_samp > 100000:
-            return
+        counter, n_ch, n_samp, dtype = hdr
         key = (str(ip), int(port))
         with self._lock:
             rec = self._sources.get(key)
@@ -622,6 +640,7 @@ class DiscoveryRegistry:
                 rec = {
                     "ip": key[0], "port": key[1], "packets": 0, "samples": 0,
                     "channels": n_ch, "samples_per_packet": n_samp,
+                    "format": "int16" if dtype == "<i2" else "float32",
                     "first_seen": t_seen, "last_seen": t_seen,
                     "device": None, "rate_sps": 0.0,
                     "lost_packets": 0, "counter_resets": 0,
@@ -646,6 +665,7 @@ class DiscoveryRegistry:
             rec["_last_counter"] = counter
             rec["channels"] = n_ch
             rec["samples_per_packet"] = n_samp
+            rec["format"] = "int16" if dtype == "<i2" else "float32"
             rec["last_seen"] = t_seen
             rec["device"] = device_name or None
             if device_name:
