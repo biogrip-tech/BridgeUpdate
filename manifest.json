@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.19-1153",
+  "version": "2026.11.19-1158",
   "bridge_api": 2,
   "min_gui": "2.3.0",
   "notes": "BridgeUpdate snapshot: bridge, plugins, cortex.",
@@ -80,7 +80,7 @@
     },
     {
       "path": "home/pico/synaptic-bridge/luckfox-device/README_bridge_v2.md",
-      "sha256": "79d5ffa8a3bfa01ae105913863c5687037fa4b58cd5fce54a8fff22be1370cc6"
+      "sha256": "36ad2eeb6ad66b1fc8d0c57971513692ad7c9f7dca8c7294fbd36c9e66c8ab43"
     },
     {
       "path": "home/pico/synaptic-bridge/luckfox-device/bridge_config.example.json",
@@ -104,7 +104,7 @@
     },
     {
       "path": "home/pico/synaptic-bridge/luckfox-device/fake_esp32.py",
-      "sha256": "deb29ded29bf25db02ad20e8b965a4d73e5b19e028c0767c83211a8b9f60a878"
+      "sha256": "25a399c03a513fa1e1e8174489af1aa3f8990b008e9754eb78e48b7d0804d2a9"
     },
     {
       "path": "home/pico/synaptic-bridge/luckfox-device/filter_chain.py",
@@ -148,7 +148,7 @@
     },
     {
       "path": "home/pico/synaptic-bridge/luckfox-device/udp_to_lsl_bridge.py",
-      "sha256": "2b794502d2619e137f2f79d52a926ded43ff716356b804c1db715cdfbc0dd649"
+      "sha256": "61529128d4f3166dffcdad7a560a135883aa0a88baf05a8ef9965deec846503b"
     },
     {
       "path": "home/pico/synaptic_cortex/euclidean_align.py",
