@@ -33,6 +33,7 @@ Ver README_bridge_v2.md para el formato completo de la config.
 
 import argparse
 import copy
+import errno
 import json
 import logging
 import os
@@ -54,6 +55,10 @@ log = logging.getLogger("bridge")
 
 HEADER_FMT = "<IHH"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)   # = 8 bytes
+# Bit 15 de nChannels: las muestras vienen en int16 (little-endian) en vez de
+# float32. Paquete la mitad de grande (ADC de 12 bits del Axon). Un puente
+# antiguo ve >64 canales y descarta el paquete como inválido (no lee basura).
+FLAG_INT16 = 0x8000
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/bridge_config.json")
 HOSTNAME = socket.gethostname()
 
@@ -72,6 +77,14 @@ GLOBAL_DEFAULTS = {
     "discovery_path": "/tmp/synaptic-bridge-discovery.json",
     "discovery_interval_s": 1.0,
     "discovery_stale_s": 120.0,
+    # Un dispositivo "cualquier IP" (match {}) se queda con el PRIMER ESP32
+    # que le envía. Paquetes de otra IP en ese puerto se descartan (y se
+    # avisa) hasta que el primero lleve este tiempo sin enviar. Así dos ESP32
+    # nunca se mezclan en el mismo stream.
+    "catch_all_hold_s": 3.0,
+    # Cada cuánto se buscan en la red otros streams LSL con el mismo nombre o
+    # source_id que los nuestros (0 = no buscar).
+    "lsl_conflict_check_s": 30.0,
 }
 
 DEVICE_DEFAULTS = {
@@ -162,12 +175,15 @@ def normalize_config(raw, path, legacy_overrides=None):
     for key in ("rcvbuf_bytes", "queue_size"):
         g[key] = int(g[key])
     for key in ("max_buffered_s", "stats_interval_s", "stage_time_budget_ms",
-                "discovery_interval_s", "discovery_stale_s"):
+                "discovery_interval_s", "discovery_stale_s", "catch_all_hold_s",
+                "lsl_conflict_check_s"):
         g[key] = float(g[key])
     g["discovery_enabled"] = _as_bool(g["discovery_enabled"])
     g["discovery_path"] = str(g["discovery_path"] or "")
     g["discovery_interval_s"] = max(0.5, g["discovery_interval_s"])
     g["discovery_stale_s"] = max(5.0, g["discovery_stale_s"])
+    g["catch_all_hold_s"] = max(0.5, g["catch_all_hold_s"])
+    g["lsl_conflict_check_s"] = max(0.0, g["lsl_conflict_check_s"])
 
     if not isinstance(devs_raw, list) or not devs_raw:
         raise ConfigError("'devices' debe ser una lista con al menos un dispositivo")
@@ -230,7 +246,19 @@ def normalize_config(raw, path, legacy_overrides=None):
             raise ConfigError(f"dos dispositivos reciben del puerto {route[0]} desde {who}")
         routes.add(route)
 
-    return {"bridge": g, "devices": devices, "legacy": legacy}
+    # Dos streams con el mismo nombre: un consumidor que busca por nombre
+    # (LabRecorder, la GUI) puede conectarse a cualquiera de los dos y saltar
+    # al otro al reconectarse. No se rechaza (rompería configs existentes),
+    # pero se avisa en el log y en --check.
+    warnings, seen = [], {}
+    for d in devices:
+        for sname in [d["stream_name"]] + ([d["stream_name"] + "_raw"] if d["publish_raw"] else []):
+            if sname in seen and seen[sname] != d["name"]:
+                warnings.append(f"los dispositivos '{seen[sname]}' y '{d['name']}' publican un "
+                                f"stream con el mismo nombre '{sname}': ponles stream_name distintos")
+            seen.setdefault(sname, d["name"])
+
+    return {"bridge": g, "devices": devices, "legacy": legacy, "warnings": warnings}
 
 
 def device_identity(dcfg, gcfg):
@@ -243,20 +271,38 @@ def device_identity(dcfg, gcfg):
 # ═══════════════════════════════════════════════════════════════════════════
 # Utilidades
 # ═══════════════════════════════════════════════════════════════════════════
-def parse_packet(packet):
-    """Devuelve (counter, ventana float32 (n_muestras, n_canales)) o None."""
+def decode_header(packet):
+    """Devuelve (counter, n_canales, n_muestras, dtype) o None si no es válido.
+    dtype es "<f4" (formato original) o "<i2" (bit FLAG_INT16 activo)."""
     if len(packet) < HEADER_SIZE:
         return None
     counter, n_ch, n_samp = struct.unpack_from(HEADER_FMT, packet, 0)
+    dtype = "<f4"
+    if n_ch & FLAG_INT16:
+        n_ch &= ~FLAG_INT16 & 0xFFFF
+        dtype = "<i2"
     if n_ch <= 0 or n_ch > 64 or n_samp <= 0 or n_samp > 100000:
         return None
-    avail_floats = (len(packet) - HEADER_SIZE) // 4
-    use = min(n_samp * n_ch, avail_floats)
+    return counter, n_ch, n_samp, dtype
+
+
+def parse_packet(packet):
+    """Devuelve (counter, ventana float32 (n_muestras, n_canales)) o None.
+    Acepta muestras float32 o int16 (se convierten a float32 sin escalar)."""
+    hdr = decode_header(packet)
+    if hdr is None:
+        return None
+    counter, n_ch, n_samp, dtype = hdr
+    itemsize = np.dtype(dtype).itemsize
+    avail = (len(packet) - HEADER_SIZE) // itemsize
+    use = min(n_samp * n_ch, avail)
     use -= use % n_ch
     if use <= 0:
         return None
-    floats = np.frombuffer(packet, dtype=np.float32, count=use, offset=HEADER_SIZE)
-    return counter, floats.reshape(use // n_ch, n_ch)
+    vals = np.frombuffer(packet, dtype=dtype, count=use, offset=HEADER_SIZE)
+    if dtype != "<f4":
+        vals = vals.astype(np.float32)
+    return counter, vals.reshape(use // n_ch, n_ch)
 
 
 def push_chunk(outlet, data, ts):
@@ -267,6 +313,29 @@ def push_chunk(outlet, data, ts):
         outlet.push_chunk(arr, ts)
     except (TypeError, ValueError):
         outlet.push_chunk(arr.tolist(), ts)
+
+
+def udp_socket_drops(port):
+    """Suma la columna 'drops' de /proc/net/udp para un puerto local (Linux).
+    Devuelve None si no se puede leer (otro SO)."""
+    total, found = 0, False
+    for fn in ("/proc/net/udp", "/proc/net/udp6"):
+        try:
+            with open(fn, "r") as f:
+                next(f, None)
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 13:
+                        continue
+                    try:
+                        if int(parts[1].rsplit(":", 1)[1], 16) == port:
+                            total += int(parts[-1])
+                            found = True
+                    except ValueError:
+                        continue
+        except OSError:
+            continue
+    return total if found else None
 
 
 class CounterClock:
@@ -389,7 +458,7 @@ class DeviceWorker(threading.Thread):
             if item is None:
                 break
             try:
-                self._handle(*item)
+                self._handle_packet(*item)
             except Exception:
                 log.exception("[%s] error procesando un paquete", self.name_)
         self.raw_outlet = None
@@ -472,7 +541,7 @@ class DeviceWorker(threading.Thread):
             push_chunk(self.raw_outlet, raw, ts)
         push_chunk(self.proc_outlet, processed, ts)
 
-    def _handle(self, t_arrival, sender_ip, packet):
+    def _handle_packet(self, t_arrival, sender_ip, packet):
         parsed = parse_packet(packet)
         if parsed is None:
             with self._lock:
@@ -557,14 +626,10 @@ class DiscoveryRegistry:
         self._devices = {}
 
     def observe(self, ip, port, packet, t_seen, device_name=None):
-        if len(packet) < HEADER_SIZE:
+        hdr = decode_header(packet)
+        if hdr is None:
             return
-        try:
-            _counter, n_ch, n_samp = struct.unpack_from(HEADER_FMT, packet, 0)
-        except struct.error:
-            return
-        if n_ch <= 0 or n_ch > 64 or n_samp <= 0 or n_samp > 100000:
-            return
+        counter, n_ch, n_samp, dtype = hdr
         key = (str(ip), int(port))
         with self._lock:
             rec = self._sources.get(key)
@@ -575,18 +640,35 @@ class DiscoveryRegistry:
                 rec = {
                     "ip": key[0], "port": key[1], "packets": 0, "samples": 0,
                     "channels": n_ch, "samples_per_packet": n_samp,
+                    "format": "int16" if dtype == "<i2" else "float32",
                     "first_seen": t_seen, "last_seen": t_seen,
                     "device": None, "rate_sps": 0.0,
+                    "lost_packets": 0, "counter_resets": 0,
                     "_win_start": t_seen, "_win_samples": 0,
+                    "_last_counter": None, "_int_packets": 0, "_int_lost": 0,
                 }
                 self._sources[key] = rec
             rec["packets"] += 1
+            rec["_int_packets"] += 1
             rec["samples"] += n_samp
+            # Pérdidas medidas en la recepción, por ESP32 (IP), antes de
+            # cualquier cola o procesamiento: si aquí hay huecos, el paquete
+            # no llegó al Luckfox (Wi-Fi / emisor), no es culpa de LSL.
+            last = rec["_last_counter"]
+            if last is not None:
+                gap = (counter - last) & 0xFFFFFFFF
+                if gap >= 0x80000000 or gap > 1000:
+                    rec["counter_resets"] += 1
+                elif gap > 1:
+                    rec["lost_packets"] += gap - 1
+                    rec["_int_lost"] += gap - 1
+            rec["_last_counter"] = counter
             rec["channels"] = n_ch
             rec["samples_per_packet"] = n_samp
+            rec["format"] = "int16" if dtype == "<i2" else "float32"
             rec["last_seen"] = t_seen
+            rec["device"] = device_name or None
             if device_name:
-                rec["device"] = device_name
                 dev = self._devices.get(device_name)
                 if dev is None:
                     dev = {"name": device_name, "port": key[1], "ips": {},
@@ -623,6 +705,16 @@ class DiscoveryRegistry:
                 dev["ips"].pop(ip, None)
             if not dev["ips"] or dev["last_seen"] < cutoff:
                 self._devices.pop(name, None)
+
+    def take_interval(self):
+        """Paquetes y pérdidas por origen desde la última llamada (y reinicia)."""
+        out = []
+        with self._lock:
+            for rec in self._sources.values():
+                out.append({"ip": rec["ip"], "port": rec["port"], "device": rec["device"],
+                            "packets": rec["_int_packets"], "lost": rec["_int_lost"]})
+                rec["_int_packets"] = rec["_int_lost"] = 0
+        return out
 
     def snapshot(self, now=None):
         now = time.monotonic() if now is None else float(now)
@@ -661,22 +753,38 @@ class DiscoveryRegistry:
 class Receiver(threading.Thread):
     UNKNOWN_LOG_EVERY_S = 30.0
 
-    def __init__(self, host, port, rcvbuf, registry=None):
+    def __init__(self, host, port, rcvbuf, registry=None, catch_all_hold_s=3.0):
         super().__init__(daemon=True, name=f"rx-{port}")
         self.host, self.port = host, port
         self._stop_ev = threading.Event()
         self.routes = ({}, None)       # (ip -> worker, worker para cualquier IP)
         self.registry = registry
+        self.catch_all_hold_s = float(catch_all_hold_s)
         self._unknown_last = {}
+        self._foreign_last = {}
         self.unknown_packets = 0
+        self.foreign_packets = 0       # rechazados por el bloqueo del catch-all
+        self._ca_worker = None         # catch-all al que pertenece el bloqueo
+        self._ca_ip = None             # IP a la que está "enganchado" el catch-all
+        self._ca_last = 0.0
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # SIN SO_REUSEADDR a propósito: con él, una segunda instancia del
+        # puente (el servicio + una ejecución a mano, o un proceso colgado)
+        # podía abrir el mismo puerto sin error y "robar" los paquetes en
+        # silencio, dejando un stream LSL vivo pero sin datos.
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, int(rcvbuf))
         except OSError:
             pass
-        sock.bind((host, port))
+        try:
+            sock.bind((host, port))
+        except OSError as e:
+            sock.close()
+            if e.errno == errno.EADDRINUSE:
+                raise OSError(e.errno, f"el puerto UDP {port} ya está en uso por otro proceso "
+                                       f"(¿otra instancia del puente? mira: sudo ss -ulpn | grep {port})")
+            raise
         sock.settimeout(0.5)
         self.sock = sock
         actual = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
@@ -686,6 +794,8 @@ class Receiver(threading.Thread):
             log.warning("puerto %d: búfer de recepción de %d KB (se pidieron %d KB). "
                         "Sube net.core.rmem_max (ver README) para evitar pérdidas.",
                         port, actual // 1024, rcvbuf // 1024)
+        self._drops0 = udp_socket_drops(port)
+        self._drops_prev = self._drops0
         log.info("escuchando UDP en %s:%d", host, port)
 
     def set_routes(self, by_ip, catch_all):
@@ -693,6 +803,36 @@ class Receiver(threading.Thread):
 
     def stop(self):
         self._stop_ev.set()
+
+    def kernel_drops_delta(self):
+        """Datagramas que el kernel descartó en este puerto desde la última
+        llamada (búfer del socket lleno = el puente no lee a tiempo)."""
+        cur = udp_socket_drops(self.port)
+        if cur is None or self._drops_prev is None:
+            return None
+        delta, self._drops_prev = max(0, cur - self._drops_prev), cur
+        return delta
+
+    def _route(self, ip, now):
+        by_ip, catch_all = self.routes
+        worker = by_ip.get(ip)
+        if worker is not None or catch_all is None:
+            return worker, False
+        if catch_all is not self._ca_worker:      # cambió la config
+            self._ca_worker, self._ca_ip = catch_all, None
+        if self._ca_ip is None or self._ca_ip == ip:
+            if self._ca_ip is None:
+                log.info("[%s] catch-all del puerto %d enganchado a %s",
+                         catch_all.name_, self.port, ip)
+            self._ca_ip, self._ca_last = ip, now
+            return catch_all, False
+        if now - self._ca_last > self.catch_all_hold_s:
+            log.warning("[%s] %s dejó de enviar hace %.1f s: el catch-all del puerto %d "
+                        "pasa a %s", catch_all.name_, self._ca_ip, now - self._ca_last,
+                        self.port, ip)
+            self._ca_ip, self._ca_last = ip, now
+            return catch_all, False
+        return None, True        # otro ESP32 en un puerto catch-all ya ocupado
 
     def run(self):
         while not self._stop_ev.is_set():
@@ -707,21 +847,34 @@ class Receiver(threading.Thread):
                 time.sleep(0.1)
                 continue
             t_arrival = local_clock()
-            by_ip, catch_all = self.routes
-            worker = by_ip.get(addr[0]) or catch_all
+            now = time.monotonic()
+            ip = addr[0]
+            worker, foreign = self._route(ip, now)
             if self.registry is not None:
-                self.registry.observe(
-                    addr[0], self.port, data, time.monotonic(),
-                    worker.name_ if worker is not None else None,
-                )
+                self.registry.observe(ip, self.port, data, now,
+                                      worker.name_ if worker is not None else None)
             if worker is None:
-                self._log_unknown(addr[0])
+                if foreign:
+                    self._log_foreign(ip, now)
+                else:
+                    self._log_unknown(ip)
                 continue
-            worker.submit((t_arrival, addr[0], data))
+            worker.submit((t_arrival, ip, data))
         try:
             self.sock.close()
         except OSError:
             pass
+
+    def _log_foreign(self, ip, now):
+        self.foreign_packets += 1
+        if now - self._foreign_last.get(ip, -1e9) >= self.UNKNOWN_LOG_EVERY_S:
+            self._foreign_last[ip] = now
+            name = self._ca_worker.name_ if self._ca_worker else "?"
+            log.warning("puerto %d: %s también está enviando, pero el dispositivo '%s' "
+                        "(match vacío) ya recibe de %s. Se DESCARTAN sus paquetes para no "
+                        "mezclar dos ESP32 en un stream: añade un dispositivo con "
+                        "\"match\": {\"ip\": \"%s\"} o usa otro puerto.",
+                        self.port, ip, name, self._ca_ip, ip)
 
     def _log_unknown(self, ip):
         self.unknown_packets += 1
@@ -730,7 +883,6 @@ class Receiver(threading.Thread):
             self._unknown_last[ip] = now
             log.warning("puerto %d: paquetes de %s sin dispositivo asignado en la config "
                         "(se descartan)", self.port, ip)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Puente: crea/actualiza dispositivos y receptores, vigila la config
@@ -747,6 +899,10 @@ class Bridge:
         self.discovery = DiscoveryRegistry()
         self._cfg_mtime = None
         self._watched = {}       # nombre -> {archivo: mtime}
+        self._conflicts = {}     # uid del stream ajeno -> descripción
+        self._conflict_thread = None
+        self._conflict_misses = {}
+        self._next_conflict_check = time.monotonic() + 3.0
 
     def start(self):
         cfg = load_config(self.config_path, self.legacy_overrides)
@@ -793,14 +949,22 @@ class Bridge:
         ports = {d["udp_port"] for d in cfg["devices"]}
         rebuild_all = old_g is not None and (old_g["host"] != g["host"] or
                                              old_g["rcvbuf_bytes"] != g["rcvbuf_bytes"])
+        closing = []
         for port in list(self.receivers):
             if port not in ports or rebuild_all:
-                self.receivers.pop(port).stop()
+                r = self.receivers.pop(port)
+                r.stop()
+                closing.append(r)
+        for r in closing:      # sin SO_REUSEADDR hay que esperar a que suelte el puerto
+            r.join(timeout=2)
+        for r in self.receivers.values():
+            r.catch_all_hold_s = g["catch_all_hold_s"]
         for port in sorted(ports):
             if port in self.receivers:
                 continue
             try:
-                r = Receiver(g["host"], port, g["rcvbuf_bytes"], self.discovery)
+                r = Receiver(g["host"], port, g["rcvbuf_bytes"], self.discovery,
+                             g["catch_all_hold_s"])
             except OSError as e:
                 msg = f"no se pudo abrir {g['host']}:{port}: {e}"
                 if initial:
@@ -834,6 +998,8 @@ class Bridge:
         elif not g["status_stream"]:
             self.status_outlet = None
 
+        for w in cfg.get("warnings", []):
+            log.warning("config: %s", w)
         if cfg["legacy"] and initial:
             log.info("config en formato antiguo (un dispositivo); ver README_bridge_v2.md "
                      "para usar varios dispositivos y stream crudo")
@@ -860,6 +1026,13 @@ class Bridge:
                 last_stats = now
                 interval = self.cfg["bridge"]["stats_interval_s"]
                 next_stats = now + interval
+            cc = self.cfg["bridge"]["lsl_conflict_check_s"]
+            if cc > 0 and now >= self._next_conflict_check and not (
+                    self._conflict_thread and self._conflict_thread.is_alive()):
+                self._next_conflict_check = now + cc
+                self._conflict_thread = threading.Thread(
+                    target=self._check_lsl_conflicts, daemon=True, name="lsl-conflicts")
+                self._conflict_thread.start()
             if self.cfg["bridge"]["discovery_enabled"] and now >= next_disc:
                 self._write_discovery()
                 disc_interval = self.cfg["bridge"]["discovery_interval_s"]
@@ -887,6 +1060,66 @@ class Bridge:
                 log.info("[%s] cambió un plugin o referencia: recargando pipeline", name)
                 w.request_pipeline(w.cfg["pipeline"])
             self._watched[name] = current
+
+    def _own_streams(self):
+        """[(nombre, source_id, uid)] de los outlets que publica este proceso."""
+        own = []
+        for w in list(self.workers.values()):
+            for outlet in (w.raw_outlet, w.proc_outlet):
+                if outlet is None:
+                    continue
+                try:
+                    info = outlet.get_info()
+                    own.append((info.name(), info.source_id(), info.uid()))
+                except Exception:
+                    pass
+        return own
+
+    def _check_lsl_conflicts(self):
+        """Busca en la red streams LSL ajenos con el mismo nombre o source_id
+        que los nuestros. Si existen, un consumidor (LabRecorder, la GUI...)
+        puede conectarse al equivocado, o saltar a él al reconectarse, y se
+        ve como que "la señal se cae"."""
+        own = self._own_streams()
+        if not own:
+            return
+        try:
+            from pylsl import resolve_streams
+            found = resolve_streams(wait_time=2.0)
+        except Exception as e:
+            log.debug("no se pudo buscar conflictos LSL: %s", e)
+            return
+        own_uids = {u for _, _, u in own}
+        current = {}
+        for info in found:
+            uid = info.uid()
+            if uid in own_uids:
+                continue
+            for name, sid, _ in own:
+                if info.source_id() == sid or info.name() == name:
+                    what = "source_id" if info.source_id() == sid else "nombre"
+                    current[uid] = (f"'{info.name()}' (source_id={info.source_id()}) en "
+                                    f"{info.hostname()} tiene el mismo {what} que nuestro "
+                                    f"stream '{name}'")
+                    break
+        # Un resolve puede perder algún stream (multicast): un conflicto se da
+        # por resuelto solo tras dos búsquedas seguidas sin verlo.
+        misses = self._conflict_misses
+        for uid in list(self._conflicts):
+            if uid not in current:
+                misses[uid] = misses.get(uid, 0) + 1
+                if misses[uid] < 2:
+                    current[uid] = self._conflicts[uid]
+                    continue
+                log.info("conflicto LSL resuelto: %s", self._conflicts[uid])
+            misses.pop(uid, None)
+        for uid, desc in current.items():
+            if uid not in self._conflicts:
+                log.warning("CONFLICTO LSL: %s. Los consumidores pueden conectarse al stream "
+                            "equivocado. Usa stream_name/source_id únicos por Luckfox y "
+                            "dispositivo, y asegúrate de que no haya otra instancia del "
+                            "puente corriendo.", desc)
+        self._conflicts = current
 
     def _write_discovery(self):
         path = self.cfg["bridge"].get("discovery_path")
@@ -935,6 +1168,27 @@ class Bridge:
                 if st["avg_ms"] > budget:
                     log.warning("[%s] la etapa %s tarda %.2f ms de media (límite %.1f ms)",
                                 name, st["stage"], st["avg_ms"], budget)
+        ports = {}
+        for port, r in list(self.receivers.items()):
+            drops = r.kernel_drops_delta()
+            ports[port] = {"kernel_drops": drops, "foreign_packets": r.foreign_packets,
+                           "unknown_packets": r.unknown_packets,
+                           "catch_all_ip": r._ca_ip}
+            if drops:
+                log.warning("puerto %d: el kernel descartó %d datagramas (búfer del socket "
+                            "lleno): el Luckfox no da abasto o el búfer es pequeño "
+                            "(rcvbuf_bytes / net.core.rmem_max)", port, drops)
+        sources = self.discovery.take_interval()
+        for src in sources:
+            if src["lost"]:
+                total = src["packets"] + src["lost"]
+                log.warning("origen %s:%d (%s): %d de %d paquetes NO llegaron al Luckfox "
+                            "(%.1f%%) -> pérdida en Wi-Fi o en el ESP32, no en LSL",
+                            src["ip"], src["port"], src["device"] or "sin asignar",
+                            src["lost"], total, 100.0 * src["lost"] / total)
+        status["ports"] = {str(k): v for k, v in ports.items()}
+        status["sources"] = sources
+        status["lsl_conflicts"] = list(self._conflicts.values())
         if self.status_outlet is not None:
             try:
                 self.status_outlet.push_sample([json.dumps(status, default=str)])
@@ -976,6 +1230,7 @@ def run_check(cfg, samples_per_window, n_windows, as_json):
             "stages": stages, "errors": errors,
         }
     report["ok"] = ok
+    report["warnings"] = list(cfg.get("warnings", []))
     if as_json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
@@ -988,6 +1243,8 @@ def run_check(cfg, samples_per_window, n_windows, as_json):
                 print(f"    ! {e}")
             print(f"    total {r['pipeline_avg_ms']:.3f} ms por ventana de {samples_per_window} muestras "
                   f"({r['window_ms']:.1f} ms de señal)")
+        for w in report["warnings"]:
+            print(f"AVISO: {w}")
         print("OK" if ok else "HAY ERRORES")
     return 0 if ok else 1
 
